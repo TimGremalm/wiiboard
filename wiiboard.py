@@ -13,29 +13,30 @@ import time
 import logging
 import collections
 import bluetooth
+import threading
 
 # Wiiboard Parameters
 CONTINUOUS_REPORTING	= b'\x04'
-COMMAND_LIGHT		   = b'\x11'
-COMMAND_REPORTING	   = b'\x12'
-COMMAND_REQUEST_STATUS  = b'\x15'
+COMMAND_LIGHT			= b'\x11'
+COMMAND_REPORTING		= b'\x12'
+COMMAND_REQUEST_STATUS	= b'\x15'
 COMMAND_REGISTER		= b'\x16'
-COMMAND_READ_REGISTER   = b'\x17'
+COMMAND_READ_REGISTER	= b'\x17'
 INPUT_STATUS			= b'\x20'
-INPUT_READ_DATA		 = b'\x21'
+INPUT_READ_DATA			= b'\x21'
 EXTENSION_8BYTES		= b'\x32'
 BUTTON_DOWN_MASK		= 0x08
-LED1_MASK			   = 0x10
-BATTERY_MAX			 = 200.0
-TOP_RIGHT			   = 0
+LED1_MASK				= 0x10
+BATTERY_MAX				= 200.0
+TOP_RIGHT				= 0
 BOTTOM_RIGHT			= 1
 TOP_LEFT				= 2
-BOTTOM_LEFT			 = 3
-BLUETOOTH_NAME		  = "Nintendo RVL-WBC-01"
+BOTTOM_LEFT				= 3
+BLUETOOTH_NAME			= "Nintendo RVL-WBC-01"
 # WiiboardSampling Parameters
-N_SAMPLES			   = 200
-N_LOOP				  = 10
-T_SLEEP				 = 2
+N_SAMPLES				= 200
+N_LOOP					= 10
+T_SLEEP					= 2
 
 # initialize the logger
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ def discover(duration=6, prefix=BLUETOOTH_NAME):
 	return [address for address, name in devices if name.startswith(prefix)]
 
 class Wiiboard:
-	def __init__(self, address=None):
+	def __init__(self, address='00:24:44:F0:F1:44'):
 		self.controlsocket = bluetooth.BluetoothSocket(bluetooth.L2CAP)
 		self.receivesocket = bluetooth.BluetoothSocket(bluetooth.L2CAP)
 		self.calibration = [[1e4]*4]*3
@@ -62,6 +63,11 @@ class Wiiboard:
 		self.button_down = False
 		self.battery = 0.0
 		self.running = True
+		self.thread = None
+		self.m = 0
+		self.t = 0
+		self.x = 0
+		self.y = 0
 		if address is not None:
 			self.connect(address)
 	def connect(self, address):
@@ -79,6 +85,12 @@ class Wiiboard:
 		self.light(0)
 	def send(self, *data):
 		self.controlsocket.send(b'\x52'+b''.join(data))
+	def startRead(self):
+		self.running = True
+		self.thread = threading.Thread(target=self.loop)
+		self.thread.start()
+	def stopRead(self):
+		self.running = False
 	def reporting(self, mode=CONTINUOUS_REPORTING, extension=EXTENSION_8BYTES):
 		self.send(COMMAND_REPORTING, mode, extension)
 	def light(self, on_off=True):
@@ -153,6 +165,37 @@ class Wiiboard:
 		self.light(1)
 	def on_mass(self, mass):
 		logger.debug("New mass data: %s", str(mass))
+		self.m = mass
+		self.x, self.y = self.center_of_mass(mass)
+		self.t = self.total_mass(mass)
+	def center_of_mass(self, mass):
+		comx = 1.0
+		comy = 1.0
+		try:
+			total_right  = mass['top_right']   + mass['bottom_right']
+			total_left   = mass['top_left']    + mass['bottom_left']
+			comx = total_right / total_left
+			if comx > 1:
+				comx = 1 - total_right / total_left
+			else:
+				comx -= 1
+			total_bottom = mass['bottom_left'] + mass['bottom_right']
+			total_top    = mass['top_left']    + mass['top_right']
+			comy = total_bottom / total_top
+			if comy > 1:
+				comy = 1 - total_top / total_bottom
+			else:
+				comy -= 1
+		except:
+			pass
+		return(comx, comy)
+	def total_mass(self, mass):
+		totMass = 0
+		try:
+			totMass = mass['top_right'] + mass['bottom_right'] + mass['top_left'] + mass['bottom_left']
+		except:
+			pass
+		return(totMass)
 	def on_pressed(self):
 		logger.info("Button pressed")
 	def on_released(self):
@@ -212,3 +255,4 @@ if __name__ == '__main__':
 		address = wiiboards[0]
 	with WiiboardPrint(address) as wiiprint:
 		wiiprint.loop()
+
